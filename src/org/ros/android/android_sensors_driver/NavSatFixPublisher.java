@@ -184,7 +184,7 @@ public void onShutdownComplete(Node arg0) {
 
 public GraphName getDefaultNodeName()
 {
-	    return GraphName.of("android_sensors_driver/imuPublisher");
+	    return GraphName.of("android_sensors_driver/navSatFixPublisher");
 }
 
 public void onError(Node node, Throwable throwable)

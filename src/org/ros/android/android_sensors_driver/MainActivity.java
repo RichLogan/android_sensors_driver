@@ -26,6 +26,7 @@ import android.hardware.SensorManager;
 import android.location.LocationManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.View;
 import android.widget.Toast;
 
 import org.ros.address.InetAddressFactory;
@@ -64,6 +65,10 @@ public class MainActivity extends RosActivity
     public MainActivity()
     {
         super("ROS Sensors Driver", "ROS Sensors Driver");
+    }
+
+    public void OnCalibrateClick(View view) {
+        imu_pub.Calibrate();
     }
 
     @Override

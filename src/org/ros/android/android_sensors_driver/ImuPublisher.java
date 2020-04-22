@@ -31,12 +31,15 @@ package org.ros.android.android_sensors_driver;
 
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.util.Log;
 
 import org.ros.node.ConnectedNode;
 import org.ros.message.Time;
@@ -52,33 +55,38 @@ import org.ros.node.topic.Publisher;
  */
 public class ImuPublisher implements NodeMain
 {
-
-  private ImuThread imuThread;
   private SensorListener sensorListener;
+  private ImuThread imuThread;
   private SensorManager sensorManager;
   private Publisher<Imu> publisher;
   private int sensorDelay;
-  
+
+  public void Calibrate() {
+  	Log.i("android_sensor_driver", "Calibrating LinearAccelerometer");
+  	sensorListener.Calibrate();
+  }
+
   private class ImuThread extends Thread
   {
 	  private final SensorManager sensorManager;
 	  private SensorListener sensorListener;
 	  private Looper threadLooper;
-	  
+
+	  private final Sensor linerAccelSensor;
 	  private final Sensor accelSensor;
 	  private final Sensor gyroSensor;
 	  private final Sensor quatSensor;
-	  
+
 	  private ImuThread(SensorManager sensorManager, SensorListener sensorListener)
 	  {
 		  this.sensorManager = sensorManager;
 		  this.sensorListener = sensorListener;
+		  this.linerAccelSensor = this.sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
 		  this.accelSensor = this.sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
 		  this.gyroSensor = this.sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
 		  this.quatSensor = this.sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
 	  }
-	  
-	    
+
 	  public void run()
 	  {
 			Looper.prepare();
@@ -86,10 +94,11 @@ public class ImuPublisher implements NodeMain
 			this.sensorManager.registerListener(this.sensorListener, this.accelSensor, sensorDelay);
 			this.sensorManager.registerListener(this.sensorListener, this.gyroSensor, sensorDelay);
 			this.sensorManager.registerListener(this.sensorListener, this.quatSensor, sensorDelay);
+			this.sensorManager.registerListener(this.sensorListener, this.linerAccelSensor, sensorDelay);
 			Looper.loop();
 	  }
-	    
-	    
+
+
 	  public void shutdown()
 	  {
 	    	this.sensorManager.unregisterListener(this.sensorListener);
@@ -99,21 +108,26 @@ public class ImuPublisher implements NodeMain
 	    	}
 	  }
 	}
-  
+
   private class SensorListener implements SensorEventListener
   {
 
     private Publisher<Imu> publisher;
-    
+
     private boolean hasAccel;
     private boolean hasGyro;
     private boolean hasQuat;
-    
+    private boolean doCalib = false;
+
     private long accelTime;
     private long gyroTime;
     private long quatTime;
-    
+
     private Imu imu;
+
+    private float xOffset = 0;
+    private float yOffset = 0;
+    private float zOffset = 0;
 
     private SensorListener(Publisher<Imu> publisher, boolean hasAccel, boolean hasGyro, boolean hasQuat)
     {
@@ -127,6 +141,10 @@ public class ImuPublisher implements NodeMain
       this.imu = this.publisher.newMessage();
     }
 
+    public void Calibrate() {
+    	doCalib = true;
+	}
+
 //	@Override
 	public void onAccuracyChanged(Sensor sensor, int accuracy)
 	{
@@ -137,27 +155,51 @@ public class ImuPublisher implements NodeMain
 	{
 		if(event.sensor.getType() == Sensor.TYPE_ACCELEROMETER)
 		{
-			this.imu.getLinearAcceleration().setX(event.values[0]);
-			this.imu.getLinearAcceleration().setY(event.values[1]);
-			this.imu.getLinearAcceleration().setZ(event.values[2]);
-			
+			// Swapped X,Y,Z -> Y,-X,Z to meet match REP103.
+//			this.imu.getLinearAcceleration().setX(event.values[1]);
+//			this.imu.getLinearAcceleration().setY(event.values[0] * -1);
+//			this.imu.getLinearAcceleration().setZ(event.values[2]);
+//			double[] tmpCov = {0,0,0, 0,0,0, 0,0,0};// TODO Make Parameter
+//			this.imu.setLinearAccelerationCovariance(tmpCov);
+//			this.accelTime = event.timestamp;
+		}
+		else if (event.sensor.getType() == Sensor.TYPE_LINEAR_ACCELERATION)
+		{
+			if (doCalib) {
+				xOffset = event.values[1];
+				yOffset = event.values[0] * -1;
+				zOffset = event.values[2];
+				doCalib = false;
+			}
+			this.imu.getLinearAcceleration().setX(event.values[1] - xOffset);
+			this.imu.getLinearAcceleration().setY((event.values[0] * -1) - yOffset);
+			this.imu.getLinearAcceleration().setZ(event.values[2] - zOffset);
 			double[] tmpCov = {0,0,0, 0,0,0, 0,0,0};// TODO Make Parameter
 			this.imu.setLinearAccelerationCovariance(tmpCov);
 			this.accelTime = event.timestamp;
 		}
 		else if(event.sensor.getType() == Sensor.TYPE_GYROSCOPE)
 		{
-			this.imu.getAngularVelocity().setX(event.values[0]);
-			this.imu.getAngularVelocity().setY(event.values[1]);
-			this.imu.getAngularVelocity().setZ(event.values[2]);
+//			this.imu.getAngularVelocity().setX(event.values[1]);
+//			this.imu.getAngularVelocity().setY(event.values[0] * -1);
+//			this.imu.getAngularVelocity().setZ(event.values[2]);
+
+			// NED->ENU.
+			float[] enu = {event.values[1], event.values[0], event.values[2] * -1};
+			this.imu.getAngularVelocity().setX(enu[0]);
+			this.imu.getAngularVelocity().setX(enu[1]);
+			this.imu.getAngularVelocity().setX(enu[2]);
+
 			double[] tmpCov = {0,0,0, 0,0,0, 0,0,0};// TODO Make Parameter
 			this.imu.setAngularVelocityCovariance(tmpCov);
 	        this.gyroTime = event.timestamp;
 		}
 		else if(event.sensor.getType() == Sensor.TYPE_ROTATION_VECTOR)
 		{
+			// NED->ENU.
 	        float[] quaternion = new float[4];
-	        SensorManager.getQuaternionFromVector(quaternion, event.values);
+	        float[] enu = {event.values[1], event.values[0], event.values[2] * -1};
+	        SensorManager.getQuaternionFromVector(quaternion, enu);
 	        this.imu.getOrientation().setW(quaternion[0]);
 	        this.imu.getOrientation().setX(quaternion[1]);
 	        this.imu.getOrientation().setY(quaternion[2]);
@@ -166,23 +208,25 @@ public class ImuPublisher implements NodeMain
 			this.imu.setOrientationCovariance(tmpCov);
 	       	this.quatTime = event.timestamp;
 		}
-		
+
 		// Currently storing event times in case I filter them in the future.  Otherwise they are used to determine if all sensors have reported.
 		if((this.accelTime != 0 || !this.hasAccel) &&
-		   (this.gyroTime != 0 || !this.hasGyro) && 
+		   (this.gyroTime != 0 || !this.hasGyro) &&
 		   (this.quatTime != 0 || !this.hasQuat))
 		{
-			// Convert event.timestamp (nanoseconds uptime) into system time, use that as the header stamp
-			long time_delta_millis = System.currentTimeMillis() - SystemClock.uptimeMillis();
-			this.imu.getHeader().setStamp(Time.fromMillis(time_delta_millis + event.timestamp/1000000));
-			this.imu.getHeader().setFrameId("/imu");// TODO Make parameter
-			
+			// Sensor event timestamp is ns since boot. Use to convert to ms from epoch.
+			long boot_time_ms = System.currentTimeMillis() - SystemClock.elapsedRealtime();
+			long event_time_as_epoch = boot_time_ms + TimeUnit.MILLISECONDS.convert(event.timestamp, TimeUnit.NANOSECONDS);
+
+			// Set timestamp and frame.
+			this.imu.getHeader().setStamp(Time.fromMillis(event_time_as_epoch));
+			this.imu.getHeader().setFrameId("imu");
+
+			// Publish.
 			publisher.publish(this.imu);
 
-			// Create a new message
+			// Prepare for next message.
 			this.imu = this.publisher.newMessage();
-			
-			// Reset times
 			this.accelTime = 0;
 			this.gyroTime = 0;
 			this.quatTime = 0;
@@ -190,7 +234,7 @@ public class ImuPublisher implements NodeMain
 	}
   }
 
-  
+
   public ImuPublisher(SensorManager manager, int sensorDelay)
   {
 	  this.sensorManager = manager;
@@ -201,7 +245,7 @@ public class ImuPublisher implements NodeMain
   {
 	    return GraphName.of("android_sensors_driver/imuPublisher");
   }
-  
+
   public void onError(Node node, Throwable throwable)
   {
   }
@@ -215,29 +259,29 @@ public class ImuPublisher implements NodeMain
 			boolean hasAccel = false;
 			boolean hasGyro = false;
 			boolean hasQuat = false;
-	
+
 			List<Sensor> accelList = this.sensorManager.getSensorList(Sensor.TYPE_ACCELEROMETER);
-			
+
 			if(accelList.size() > 0)
 			{
 				hasAccel = true;
 			}
-			
+
 			List<Sensor> gyroList = this.sensorManager.getSensorList(Sensor.TYPE_GYROSCOPE);
 			if(gyroList.size() > 0)
 			{
 				hasGyro = true;
 			}
-			
+
 			List<Sensor> quatList = this.sensorManager.getSensorList(Sensor.TYPE_ROTATION_VECTOR);
 			if(quatList.size() > 0)
 			{
 				hasQuat = true;
 			}
-			
+
 			this.sensorListener = new SensorListener(publisher, hasAccel, hasGyro, hasQuat);
 			this.imuThread = new ImuThread(this.sensorManager, sensorListener);
-			this.imuThread.start();		
+			this.imuThread.start();
 	  }
 	  catch (Exception e)
 	  {
@@ -259,7 +303,7 @@ public class ImuPublisher implements NodeMain
 	  	  	return;
 	  }
 	  this.imuThread.shutdown();
-	
+
 	  try
 	  {
 		  this.imuThread.join();
